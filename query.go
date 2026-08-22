@@ -1,3 +1,11 @@
+// Package entpager provides dependency-free offset pagination for Ent-style
+// queries.
+//
+// Paginate accepts any query with All, Offset, and Limit methods matching the
+// Ent interface. Options can set the page and limit directly or derive them
+// from URL values and HTTP requests. A bounded query fetches one extra entity
+// to determine whether Response.NextPage should be set, avoiding a separate
+// count query.
 package entpager
 
 import (
