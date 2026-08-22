@@ -33,8 +33,7 @@ Pass a generated Ent query to `Paginate`:
 result, err := entpager.Paginate(
 	ctx,
 	client.User.Query().Order(user.ByName()),
-	entpager.Page(2),
-	entpager.Limit(25),
+	entpager.Pagination{Page: 2, Limit: 25},
 )
 if err != nil {
 	return err
@@ -54,14 +53,16 @@ the next page number. `NextPage` is zero when there is no known next page.
 
 ### Read pagination from an HTTP request
 
-`Request` reads the `page` and `limit` query parameters:
+`PaginationFromRequest` reads and normalizes the `page` and `limit` query
+parameters before the query is built:
 
 ```go
 func listUsers(w http.ResponseWriter, r *http.Request) {
+	pagination := entpager.PaginationFromRequest(r)
 	result, err := entpager.Paginate(
 		r.Context(),
 		client.User.Query().Order(user.ByID()),
-		entpager.Request(r),
+		pagination,
 	)
 	if errors.Is(err, entpager.ErrOffsetTooLarge) {
 		http.Error(w, "page is too large", http.StatusBadRequest)
@@ -79,17 +80,19 @@ func listUsers(w http.ResponseWriter, r *http.Request) {
 Use a deterministic order when paginating. Without one, database row order is
 not guaranteed and records may be repeated or skipped between requests.
 
-Options can also be combined and reused:
+`Pagination` has a useful zero value. Constructing it directly with omitted,
+zero, or negative fields uses page 1 and `DefaultLimit`; limits above
+`MaximumLimit` are clamped:
 
 ```go
-pagination := entpager.Options(entpager.Page(2), entpager.Limit(50))
-result, err := entpager.Paginate(ctx, client.User.Query(), pagination)
+result, err := entpager.Paginate(ctx, client.User.Query(), entpager.Pagination{})
 ```
 
 ### Custom query-parameter names
 
-`RequestWithNames` and `ValuesWithNames` accept immutable custom names. Empty
-fields use the standard `page` and `limit` names:
+`PaginationFromRequestWithNames` and `PaginationFromValuesWithNames` accept
+immutable custom names. Empty fields use the standard `page` and `limit`
+names:
 
 ```go
 names := entpager.ParameterNames{
@@ -97,16 +100,53 @@ names := entpager.ParameterNames{
 	Limit: "page_size",
 }
 
+pagination := entpager.PaginationFromRequestWithNames(r, names)
 result, err := entpager.Paginate(
 	r.Context(),
 	client.User.Query().Order(user.ByID()),
-	entpager.RequestWithNames(r, names),
+	pagination,
 )
 ```
 
+## Compose pagination with Ent filters
+
+Embed `Pagination` in an application-specific parameter type. Parse and
+validate filters in the application, apply Ent's generated predicates, and
+then pass only the pagination value to Entpager:
+
+```go
+type UserParams struct {
+	entpager.Pagination
+	Name string
+}
+
+func listUsers(w http.ResponseWriter, r *http.Request) {
+	params := UserParams{
+		Pagination: entpager.PaginationFromRequest(r),
+		Name:       r.URL.Query().Get("name"),
+	}
+
+	query := client.User.Query()
+	if params.Name != "" {
+		query = query.Where(user.NameContainsFold(params.Name))
+	}
+	result, err := entpager.Paginate(
+		r.Context(),
+		query.Order(user.ByID()),
+		params.Pagination,
+	)
+	// Handle err and encode result.
+}
+```
+
+Keeping filters outside Entpager preserves Ent's generated, type-safe
+predicates and avoids a dynamic string-to-query layer. It also lets the same
+`Pagination` type compose with different schemas and filter models.
+
 ## Safe limits
 
-Entpager bounds work caused by ordinary and HTTP-derived pagination options:
+Entpager bounds work caused by directly constructed and HTTP-derived pagination
+values:
 
 - `DefaultLimit` is `25`.
 - `MaximumLimit` is `100`.
@@ -132,6 +172,7 @@ Trusted callers can deliberately exceed `MaximumLimit` with `UnsafeLimit`:
 result, err := entpager.Paginate(
 	ctx,
 	client.User.Query().Order(user.ByID()),
+	entpager.Pagination{},
 	entpager.UnsafeLimit(500),
 )
 ```
@@ -154,10 +195,28 @@ Errors returned by the underlying Ent query are returned unchanged.
 ## Pre-v1 compatibility
 
 The package is not yet v1, so security and API improvements may be breaking.
-In particular, `Limit(0)` and negative limits now use `DefaultLimit` rather
-than disabling pagination, positive limits are capped unless `UnsafeLimit` is
-used, and the exported defaults and parameter names are constants rather than
-mutable variables.
+`Paginate` now requires a dedicated `Pagination` argument; the former
+`Page`, `Limit`, `Values`, `Request`, and `Options` option helpers have been
+removed. Migrate direct values and HTTP requests as follows:
+
+```go
+// Before:
+entpager.Paginate(ctx, query, entpager.Page(2), entpager.Limit(25))
+
+// Now:
+entpager.Paginate(ctx, query, entpager.Pagination{Page: 2, Limit: 25})
+
+// Before:
+entpager.Paginate(ctx, query, entpager.Request(r))
+
+// Now:
+entpager.Paginate(ctx, query, entpager.PaginationFromRequest(r))
+```
+
+Custom-name callers should replace `RequestWithNames` or `ValuesWithNames`
+with `PaginationFromRequestWithNames` or
+`PaginationFromValuesWithNames`. `UnsafeLimit` remains an option and follows
+the required pagination argument.
 
 ## How it integrates with Ent
 

@@ -3,6 +3,7 @@ package entpager_test
 import (
 	"context"
 	"errors"
+	"math"
 	"net/url"
 	"strconv"
 	"testing"
@@ -10,25 +11,33 @@ import (
 	"github.com/hcarriz/entpager"
 )
 
-func FuzzValues(f *testing.F) {
+func FuzzPaginationFromValues(f *testing.F) {
 	f.Add("", "", uint8(32))
 	f.Add("1", "25", uint8(50))
 	f.Add("2", "5", uint8(10))
 	f.Add("-5", "0", uint8(16))
 	f.Add("invalid", "invalid", uint8(8))
 	f.Add("1000", "1000", uint8(255))
-	f.Add(strconv.Itoa(maxInt()), strconv.Itoa(maxInt()), uint8(1))
-	f.Add(strconv.Itoa(-maxInt()-1), strconv.Itoa(-maxInt()-1), uint8(1))
+	f.Add(strconv.Itoa(math.MaxInt), strconv.Itoa(math.MaxInt), uint8(1))
+	f.Add(strconv.Itoa(-math.MaxInt-1), strconv.Itoa(-math.MaxInt-1), uint8(1))
 
 	f.Fuzz(func(t *testing.T, rawPage, rawLimit string, amount uint8) {
 		values := url.Values{
 			entpager.ParameterPage:  {rawPage},
 			entpager.ParameterLimit: {rawLimit},
 		}
+		pagination := entpager.PaginationFromValues(values)
+		if pagination.Page < 1 {
+			t.Fatalf("parsed Page = %d, want at least 1", pagination.Page)
+		}
+		if pagination.Limit < 1 || pagination.Limit > entpager.MaximumLimit {
+			t.Fatalf("parsed Limit = %d, want between 1 and %d", pagination.Limit, entpager.MaximumLimit)
+		}
+
 		got, err := entpager.Paginate(
 			context.Background(),
 			newFake(int(amount)),
-			entpager.Values(values),
+			pagination,
 		)
 		if err != nil {
 			if !errors.Is(err, entpager.ErrOffsetTooLarge) {

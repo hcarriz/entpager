@@ -2,10 +2,10 @@
 // queries.
 //
 // Paginate accepts any query with All, Offset, and Limit methods matching the
-// Ent interface. Options can set the page and limit directly or derive them
-// from URL values and HTTP requests. A bounded query fetches one extra entity
-// to determine whether Response.NextPage should be set, avoiding a separate
-// count query.
+// Ent interface. Pagination values can be constructed directly or derived from
+// URL values and HTTP requests. A bounded query fetches one extra entity to
+// determine whether Response.NextPage should be set, avoiding a separate count
+// query.
 package entpager
 
 import (
@@ -64,67 +64,66 @@ func (n ParameterNames) defaults() ParameterNames {
 	return n
 }
 
-type props struct {
-	page  int
-	limit int
+// Pagination identifies the requested page and maximum number of entities to
+// return. Its zero value requests the first page with DefaultLimit entities.
+//
+// Pagination is intended to be embedded in application-specific parameter
+// types that also contain filters or sorting controls.
+type Pagination struct {
+	Page  int
+	Limit int
 }
 
-func (p props) offset() (int, error) {
-	pageOffset := p.page - 1
+func (p Pagination) normalized() Pagination {
+	p.Page = max(1, p.Page)
+	if p.Limit <= 0 {
+		p.Limit = DefaultLimit
+	}
+	p.Limit = min(p.Limit, MaximumLimit)
+	return p
+}
+
+func (p Pagination) offset() (int, error) {
+	pageOffset := p.Page - 1
 	if pageOffset == 0 {
 		return 0, nil
 	}
-	if p.limit > MaximumOffset/pageOffset {
+	if p.Limit > MaximumOffset/pageOffset {
 		return 0, fmt.Errorf(
 			"%w: page %d with limit %d exceeds maximum offset %d",
 			ErrOffsetTooLarge,
-			p.page,
-			p.limit,
+			p.Page,
+			p.Limit,
 			MaximumOffset,
 		)
 	}
-	return p.limit * pageOffset, nil
+	return p.Limit * pageOffset, nil
 }
 
 // Option configures a call to Paginate.
 type Option interface {
-	apply(*props) error
+	apply(*Pagination) error
 }
 
-type option func(*props) error
+type option func(*Pagination) error
 
-func (o option) apply(p *props) error {
+func (o option) apply(p *Pagination) error {
 	return o(p)
 }
 
-// Options combines multiple options into one option. Nil options are ignored.
-func Options(opts ...Option) Option {
-	return option(func(p *props) error {
-		for _, opt := range opts {
-			if opt == nil {
-				continue
-			}
-			if err := opt.apply(p); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-}
-
-// Values sets the page and limit from url.Values using ParameterPage and
-// ParameterLimit.
+// PaginationFromValues returns pagination parsed from vals using ParameterPage
+// and ParameterLimit.
 //
-// Missing or malformed values use safe defaults. Numeric values are normalized
-// by Page and Limit.
-func Values(vals url.Values) Option {
-	return ValuesWithNames(vals, ParameterNames{})
+// Missing or malformed values use safe defaults. Page values below one use the
+// first page, and limits are clamped to the inclusive range from one to
+// MaximumLimit.
+func PaginationFromValues(vals url.Values) Pagination {
+	return PaginationFromValuesWithNames(vals, ParameterNames{})
 }
 
-// ValuesWithNames sets the page and limit from url.Values using custom
-// parameter names. Empty names use ParameterPage and ParameterLimit.
-func ValuesWithNames(vals url.Values, names ParameterNames) Option {
+// PaginationFromValuesWithNames returns pagination parsed from vals using
+// custom parameter names. Empty names use ParameterPage and ParameterLimit.
+func PaginationFromValuesWithNames(vals url.Values, names ParameterNames) Pagination {
 	names = names.defaults()
 
 	raw := vals.Get(names.Limit)
@@ -135,47 +134,25 @@ func ValuesWithNames(vals url.Values, names ParameterNames) Option {
 
 	rawPage := vals.Get(names.Page)
 	page, _ := strconv.Atoi(rawPage)
-	return Options(Limit(limit), Page(page))
+	return Pagination{Page: page, Limit: limit}.normalized()
 }
 
-// Request sets the page and limit from an HTTP request using ParameterPage and
+// PaginationFromRequest returns pagination parsed from an HTTP request using
+// ParameterPage and ParameterLimit. A nil request or URL uses safe defaults.
+func PaginationFromRequest(req *http.Request) Pagination {
+	return PaginationFromRequestWithNames(req, ParameterNames{})
+}
+
+// PaginationFromRequestWithNames returns pagination parsed from an HTTP request
+// using custom parameter names. Empty names use ParameterPage and
 // ParameterLimit. A nil request or URL uses safe defaults.
-func Request(req *http.Request) Option {
-	return RequestWithNames(req, ParameterNames{})
-}
-
-// RequestWithNames sets the page and limit from an HTTP request using custom
-// parameter names. Empty names use ParameterPage and ParameterLimit. A nil
-// request or URL uses safe defaults.
-func RequestWithNames(req *http.Request, names ParameterNames) Option {
+func PaginationFromRequestWithNames(req *http.Request, names ParameterNames) Pagination {
 	var values url.Values
 	if req != nil && req.URL != nil {
 		values = req.URL.Query()
 	}
 
-	return ValuesWithNames(values, names)
-}
-
-// Page sets the page of entities to return. Values below one use the first
-// page. Paginate returns ErrOffsetTooLarge if the resulting offset exceeds
-// MaximumOffset.
-func Page(page int) Option {
-	return option(func(p *props) error {
-		p.page = max(1, page)
-		return nil
-	})
-}
-
-// Limit sets the maximum number of entities to return. Values below one use
-// DefaultLimit, and values above MaximumLimit are clamped to MaximumLimit.
-func Limit(limit int) Option {
-	return option(func(p *props) error {
-		if limit <= 0 {
-			limit = DefaultLimit
-		}
-		p.limit = min(limit, MaximumLimit)
-		return nil
-	})
+	return PaginationFromValuesWithNames(values, names)
 }
 
 // UnsafeLimit sets a limit without applying MaximumLimit. It is intended only
@@ -185,11 +162,11 @@ func Limit(limit int) Option {
 // UnsafeLimit returns ErrInvalidLimit from Paginate when limit is non-positive
 // or cannot be incremented for the next-page lookahead query.
 func UnsafeLimit(limit int) Option {
-	return option(func(p *props) error {
+	return option(func(p *Pagination) error {
 		if limit <= 0 || limit == math.MaxInt {
 			return fmt.Errorf("%w: unsafe limit must be between 1 and %d", ErrInvalidLimit, math.MaxInt-1)
 		}
-		p.limit = limit
+		p.Limit = limit
 		return nil
 	})
 }
@@ -208,13 +185,12 @@ func (r Response[I]) String() string {
 	return fmt.Sprintf("[]%T(List: %d, Page: %d, Limit: %d, NextPage: %d)", i, len(r.List), r.Page, r.Limit, r.NextPage)
 }
 
-// Paginate applies opts to q and returns one page of entities. It fetches one
-// extra entity for bounded queries to determine whether a next page exists.
-func Paginate[T any, E Ent[E, T]](ctx context.Context, q Ent[E, T], opts ...Option) (Response[T], error) {
-	params := props{
-		page:  1,
-		limit: DefaultLimit,
-	}
+// Paginate applies pagination and opts to q and returns one page of entities.
+// It fetches one extra entity for bounded queries to determine whether a next
+// page exists. The pagination value is normalized before any options are
+// applied, so its zero value is safe and useful.
+func Paginate[T any, E Ent[E, T]](ctx context.Context, q Ent[E, T], pagination Pagination, opts ...Option) (Response[T], error) {
+	params := pagination.normalized()
 
 	for _, opt := range opts {
 		if opt == nil {
@@ -231,7 +207,7 @@ func Paginate[T any, E Ent[E, T]](ctx context.Context, q Ent[E, T], opts ...Opti
 		return Response[T]{}, err
 	}
 
-	q = q.Limit(params.limit + 1)
+	q = q.Limit(params.Limit + 1)
 
 	results, err := q.Offset(offset).All(ctx)
 	if err != nil {
@@ -240,15 +216,15 @@ func Paginate[T any, E Ent[E, T]](ctx context.Context, q Ent[E, T], opts ...Opti
 
 	nextPage := 0
 
-	if len(results) > params.limit {
-		results = results[:params.limit]
-		nextPage = max(1, params.page) + 1
+	if len(results) > params.Limit {
+		results = results[:params.Limit]
+		nextPage = params.Page + 1
 	}
 
 	return Response[T]{
 		List:     results,
 		NextPage: nextPage,
-		Page:     params.page,
-		Limit:    params.limit,
+		Page:     params.Page,
+		Limit:    params.Limit,
 	}, nil
 }

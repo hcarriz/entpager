@@ -32,6 +32,11 @@ directory only when it has a distinct, independently useful responsibility.
 - Do not add a direct dependency on Ent. Preserve the small structural `Ent`
   interface so generated Ent query types satisfy it implicitly.
 - Keep public APIs idiomatic, small, and documented with Go doc comments.
+- Keep `Pagination` as the dedicated, embeddable input to `Paginate`; HTTP and
+  URL helpers should return pagination values rather than hide transport input
+  inside options.
+- Keep application-specific Ent filtering and sorting outside this package so
+  callers retain generated, type-safe predicates.
 - Treat API compatibility thoughtfully, but breaking changes are allowed before
   v1 when they make the API safer or clearer. Call out every breaking change in
   the README and handoff summary.
@@ -96,7 +101,7 @@ go test -shuffle=on -count=1 ./...
 Run each affected fuzz target for at least 30 seconds. For example:
 
 ```sh
-go test -fuzz=FuzzValues -fuzztime=30s .
+go test -fuzz=FuzzPaginationFromValues -fuzztime=30s .
 ```
 
 Use `go test -cover ./...` to find meaningful gaps, but do not add tests that

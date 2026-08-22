@@ -3,6 +3,7 @@ package entpager_test
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -77,10 +78,11 @@ func TestPaginate(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		amount int
-		opts   []entpager.Option
-		want   entpager.Response[int]
+		name       string
+		amount     int
+		pagination entpager.Pagination
+		opts       []entpager.Option
+		want       entpager.Response[int]
 	}{
 		{
 			name:   "defaults",
@@ -104,7 +106,9 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "bounded limit",
 			amount: 10,
-			opts:   []entpager.Option{entpager.Limit(5)},
+			pagination: entpager.Pagination{
+				Limit: 5,
+			},
 			want: entpager.Response[int]{
 				List:     sequence(0, 5),
 				Page:     1,
@@ -115,7 +119,9 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "zero limit uses default",
 			amount: 30,
-			opts:   []entpager.Option{entpager.Limit(0)},
+			pagination: entpager.Pagination{
+				Limit: 0,
+			},
 			want: entpager.Response[int]{
 				List:     sequence(0, entpager.DefaultLimit),
 				Page:     1,
@@ -126,7 +132,9 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "negative limit uses default",
 			amount: 30,
-			opts:   []entpager.Option{entpager.Limit(-1)},
+			pagination: entpager.Pagination{
+				Limit: -1,
+			},
 			want: entpager.Response[int]{
 				List:     sequence(0, entpager.DefaultLimit),
 				Page:     1,
@@ -137,7 +145,9 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "large limit is clamped",
 			amount: entpager.MaximumLimit + 1,
-			opts:   []entpager.Option{entpager.Limit(1000)},
+			pagination: entpager.Pagination{
+				Limit: 1000,
+			},
 			want: entpager.Response[int]{
 				List:     sequence(0, entpager.MaximumLimit),
 				Page:     1,
@@ -148,7 +158,10 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "second page",
 			amount: 10,
-			opts:   []entpager.Option{entpager.Limit(5), entpager.Page(2)},
+			pagination: entpager.Pagination{
+				Page:  2,
+				Limit: 5,
+			},
 			want: entpager.Response[int]{
 				List:  sequence(5, 5),
 				Page:  2,
@@ -158,7 +171,10 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "negative page uses first page",
 			amount: 10,
-			opts:   []entpager.Option{entpager.Page(-100), entpager.Limit(5)},
+			pagination: entpager.Pagination{
+				Page:  -100,
+				Limit: 5,
+			},
 			want: entpager.Response[int]{
 				List:     sequence(0, 5),
 				Page:     1,
@@ -169,9 +185,9 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "HTTP values",
 			amount: 10,
-			opts: []entpager.Option{entpager.Request(&http.Request{URL: &url.URL{
+			pagination: entpager.PaginationFromRequest(&http.Request{URL: &url.URL{
 				RawQuery: url.Values{"page": {"2"}, "limit": {"5"}}.Encode(),
-			}})},
+			}}),
 			want: entpager.Response[int]{
 				List:  sequence(5, 5),
 				Page:  2,
@@ -181,10 +197,10 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "malformed HTTP values use defaults",
 			amount: 30,
-			opts: []entpager.Option{entpager.Values(url.Values{
+			pagination: entpager.PaginationFromValues(url.Values{
 				"page":  {"invalid"},
 				"limit": {"invalid"},
-			})},
+			}),
 			want: entpager.Response[int]{
 				List:     sequence(0, entpager.DefaultLimit),
 				Page:     1,
@@ -195,9 +211,9 @@ func TestPaginate(t *testing.T) {
 		{
 			name:   "unsafe HTTP limits are clamped",
 			amount: entpager.MaximumLimit + 1,
-			opts: []entpager.Option{entpager.Values(url.Values{
+			pagination: entpager.PaginationFromValues(url.Values{
 				"limit": {"1000000"},
-			})},
+			}),
 			want: entpager.Response[int]{
 				List:     sequence(0, entpager.MaximumLimit),
 				Page:     1,
@@ -206,9 +222,9 @@ func TestPaginate(t *testing.T) {
 			},
 		},
 		{
-			name:   "nil request uses defaults",
-			amount: 5,
-			opts:   []entpager.Option{entpager.Request(nil)},
+			name:       "nil request uses defaults",
+			amount:     5,
+			pagination: entpager.PaginationFromRequest(nil),
 			want: entpager.Response[int]{
 				List:  sequence(0, 5),
 				Page:  1,
@@ -216,19 +232,9 @@ func TestPaginate(t *testing.T) {
 			},
 		},
 		{
-			name:   "request with nil URL uses defaults",
-			amount: 5,
-			opts:   []entpager.Option{entpager.Request(&http.Request{})},
-			want: entpager.Response[int]{
-				List:  sequence(0, 5),
-				Page:  1,
-				Limit: entpager.DefaultLimit,
-			},
-		},
-		{
-			name:   "combined nil option",
-			amount: 5,
-			opts:   []entpager.Option{entpager.Options(nil)},
+			name:       "request with nil URL uses defaults",
+			amount:     5,
+			pagination: entpager.PaginationFromRequest(&http.Request{}),
 			want: entpager.Response[int]{
 				List:  sequence(0, 5),
 				Page:  1,
@@ -242,7 +248,7 @@ func TestPaginate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := entpager.Paginate(context.Background(), newFake(tt.amount), tt.opts...)
+			got, err := entpager.Paginate(context.Background(), newFake(tt.amount), tt.pagination, tt.opts...)
 			if err != nil {
 				t.Fatalf("Paginate() error = %v", err)
 			}
@@ -291,10 +297,11 @@ func TestCustomParameterNames(t *testing.T) {
 			t.Parallel()
 
 			req := &http.Request{URL: &url.URL{RawQuery: values.Encode()}}
+			pagination := entpager.PaginationFromRequestWithNames(req, tt.names)
 			got, err := entpager.Paginate(
 				context.Background(),
 				newFake(10),
-				entpager.RequestWithNames(req, tt.names),
+				pagination,
 			)
 			if err != nil {
 				t.Fatalf("Paginate() error = %v", err)
@@ -313,6 +320,7 @@ func TestUnsafeLimit(t *testing.T) {
 	got, err := entpager.Paginate(
 		context.Background(),
 		query,
+		entpager.Pagination{},
 		entpager.UnsafeLimit(entpager.MaximumLimit+1),
 	)
 	if err != nil {
@@ -342,7 +350,7 @@ func TestUnsafeLimitRejectsInvalidValues(t *testing.T) {
 	}{
 		{name: "zero", limit: 0},
 		{name: "negative", limit: -1},
-		{name: "maximum int", limit: maxInt()},
+		{name: "maximum int", limit: math.MaxInt},
 	}
 
 	for _, tt := range tests {
@@ -353,6 +361,7 @@ func TestUnsafeLimitRejectsInvalidValues(t *testing.T) {
 			got, err := entpager.Paginate(
 				context.Background(),
 				newFake(1),
+				entpager.Pagination{},
 				entpager.UnsafeLimit(tt.limit),
 			)
 			if !errors.Is(err, entpager.ErrInvalidLimit) {
@@ -376,8 +385,7 @@ func TestMaximumOffset(t *testing.T) {
 		got, err := entpager.Paginate(
 			context.Background(),
 			query,
-			entpager.Page(page),
-			entpager.Limit(entpager.MaximumLimit),
+			entpager.Pagination{Page: page, Limit: entpager.MaximumLimit},
 		)
 		if err != nil {
 			t.Fatalf("Paginate() error = %v", err)
@@ -391,24 +399,25 @@ func TestMaximumOffset(t *testing.T) {
 	})
 
 	tests := []struct {
-		name string
-		opts []entpager.Option
+		name       string
+		pagination entpager.Pagination
+		opts       []entpager.Option
 	}{
 		{
 			name: "above boundary",
-			opts: []entpager.Option{
-				entpager.Page(entpager.MaximumOffset/entpager.MaximumLimit + 2),
-				entpager.Limit(entpager.MaximumLimit),
+			pagination: entpager.Pagination{
+				Page:  entpager.MaximumOffset/entpager.MaximumLimit + 2,
+				Limit: entpager.MaximumLimit,
 			},
 		},
 		{
-			name: "maximum int page",
-			opts: []entpager.Option{entpager.Page(maxInt())},
+			name:       "maximum int page",
+			pagination: entpager.Pagination{Page: math.MaxInt},
 		},
 		{
-			name: "unsafe limit still observes maximum offset",
+			name:       "unsafe limit still observes maximum offset",
+			pagination: entpager.Pagination{Page: 2},
 			opts: []entpager.Option{
-				entpager.Page(2),
 				entpager.UnsafeLimit(entpager.MaximumOffset + 1),
 			},
 		},
@@ -420,7 +429,7 @@ func TestMaximumOffset(t *testing.T) {
 			t.Parallel()
 
 			query := newFake(0)
-			got, err := entpager.Paginate(context.Background(), query, tt.opts...)
+			got, err := entpager.Paginate(context.Background(), query, tt.pagination, tt.opts...)
 			if !errors.Is(err, entpager.ErrOffsetTooLarge) {
 				t.Fatalf("Paginate() error = %v, want ErrOffsetTooLarge", err)
 			}
@@ -438,7 +447,7 @@ func TestPaginateReturnsQueryError(t *testing.T) {
 	t.Parallel()
 
 	want := errors.New("query failed")
-	got, err := entpager.Paginate(context.Background(), &errorQuery{err: want})
+	got, err := entpager.Paginate(context.Background(), &errorQuery{err: want}, entpager.Pagination{})
 
 	if !errors.Is(err, want) {
 		t.Fatalf("Paginate() error = %v, want %v", err, want)
@@ -446,8 +455,4 @@ func TestPaginateReturnsQueryError(t *testing.T) {
 	if !reflect.DeepEqual(got, entpager.Response[int]{}) {
 		t.Fatalf("Paginate() response = %v, want zero response", got)
 	}
-}
-
-func maxInt() int {
-	return int(^uint(0) >> 1)
 }

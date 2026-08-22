@@ -22,6 +22,11 @@ and add or update tests for observable behavior.
   the package's structural `Ent` interface.
 - Prefer a flat package layout while the project remains small.
 - Keep exported APIs and behavior documented.
+- Keep `Pagination` as the dedicated input to `Paginate`. Request and URL
+  adapters return pagination values; options are reserved for explicit
+  exceptional behavior such as `UnsafeLimit`.
+- Leave schema-specific filtering and sorting to callers and Ent's generated
+  predicates.
 - Use deterministic query ordering in examples.
 - Update the README when public behavior changes.
 
@@ -79,7 +84,7 @@ Run each fuzz target affected by the change separately. The package currently
 has this target:
 
 ```sh
-go test -fuzz=FuzzValues -fuzztime=30s .
+go test -fuzz=FuzzPaginationFromValues -fuzztime=30s .
 ```
 
 Longer fuzzing is encouraged before releases and after changes to parsing,

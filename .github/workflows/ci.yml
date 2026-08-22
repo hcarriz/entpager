@@ -54,4 +54,4 @@ jobs:
           cache: false
 
       - name: Fuzz query values
-        run: go test -fuzz=FuzzValues -fuzztime=30s .
+        run: go test -fuzz=FuzzPaginationFromValues -fuzztime=30s .
