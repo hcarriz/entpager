@@ -2,6 +2,7 @@ package entpager_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -51,6 +52,24 @@ func newfaker(n int) *fake {
 }
 
 var _ entpager.Ent[*fake, int] = (*fake)(nil)
+
+type errorQuery struct {
+	err error
+}
+
+func (q *errorQuery) All(context.Context) ([]int, error) {
+	return nil, q.err
+}
+
+func (q *errorQuery) Limit(int) *errorQuery {
+	return q
+}
+
+func (q *errorQuery) Offset(int) *errorQuery {
+	return q
+}
+
+var _ entpager.Ent[*errorQuery, int] = (*errorQuery)(nil)
 
 func TestSearch(t *testing.T) {
 	type args struct {
@@ -160,6 +179,48 @@ func TestSearch(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "nil request",
+			args: args{
+				amount: 5,
+				opts:   []entpager.Option{entpager.Request(nil)},
+			},
+			want: entpager.Response[int]{
+				List:     []int{0, 1, 2, 3, 4},
+				Page:     1,
+				Limit:    entpager.DefaultLimit,
+				NextPage: 0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "request with nil URL",
+			args: args{
+				amount: 5,
+				opts:   []entpager.Option{entpager.Request(&http.Request{})},
+			},
+			want: entpager.Response[int]{
+				List:     []int{0, 1, 2, 3, 4},
+				Page:     1,
+				Limit:    entpager.DefaultLimit,
+				NextPage: 0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "combined nil option",
+			args: args{
+				amount: 5,
+				opts:   []entpager.Option{entpager.Options(nil)},
+			},
+			want: entpager.Response[int]{
+				List:     []int{0, 1, 2, 3, 4},
+				Page:     1,
+				Limit:    entpager.DefaultLimit,
+				NextPage: 0,
+			},
+			wantErr: false,
+		},
+		{
 			name: "requested, but bad values",
 			args: args{
 				amount: 10,
@@ -239,5 +300,19 @@ func TestSearch(t *testing.T) {
 
 			t.Log(got.String())
 		})
+	}
+}
+
+func TestPaginateReturnsQueryError(t *testing.T) {
+	t.Parallel()
+
+	want := errors.New("query failed")
+	got, err := entpager.Paginate(context.Background(), &errorQuery{err: want})
+
+	if !errors.Is(err, want) {
+		t.Fatalf("Paginate() error = %v, want %v", err, want)
+	}
+	if !reflect.DeepEqual(got, entpager.Response[int]{}) {
+		t.Fatalf("Paginate() response = %v, want zero response", got)
 	}
 }
