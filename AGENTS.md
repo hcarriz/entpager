@@ -16,6 +16,8 @@ This file applies to the entire repository.
 - `fuzz_test.go` contains fuzz tests for parsing and pagination invariants.
 - `README.md` is user-facing documentation.
 - `CONTRIBUTING.md` describes the contributor workflow.
+- `SECURITY.md` defines supported versions and private vulnerability reporting.
+- `.github/workflows/` contains CI and security automation.
 
 Prefer this flat layout while the package remains small. Add a package or
 directory only when it has a distinct, independently useful responsibility.
@@ -23,6 +25,9 @@ directory only when it has a distinct, independently useful responsibility.
 ## Working agreements
 
 - Support Go 1.21 and newer.
+- Treat Go 1.21 as the source-compatibility floor, not a secure deployment
+  recommendation; production guidance must require a supported, patched Go
+  release.
 - Keep production and test code dependency-free; use the standard library.
 - Do not add a direct dependency on Ent. Preserve the small structural `Ent`
   interface so generated Ent query types satisfy it implicitly.
@@ -38,22 +43,26 @@ directory only when it has a distinct, independently useful responsibility.
 
 ## Pagination and security invariants
 
-Current behavior and intended behavior are documented separately in the README.
-Do not describe an intended API as already available.
-
-When implementing the planned bounded-limit behavior:
-
-- Keep `DefaultLimit` at 25 unless the change is deliberate and documented.
-- Bound ordinary and HTTP-derived limits to `MaximumLimit`, initially 100.
-- Treat missing, malformed, zero, and negative HTTP limit values as
+- Keep `DefaultLimit` at 25, `MaximumLimit` at 100, and `MaximumOffset` at
+  1,000,000 unless a deliberate breaking change updates code, tests, and docs.
+- Bound ordinary and HTTP-derived limits to `MaximumLimit`.
+- Treat missing, malformed, zero, and negative limit values as
   `DefaultLimit`.
 - Clamp page values below 1 to page 1.
-- Permit limits above the maximum only through an explicit API whose name and
-  documentation make the unsafe resource-consumption tradeoff obvious.
-- Never enable the unsafe limit implicitly from untrusted query parameters.
-- Guard page/limit offset arithmetic against integer overflow.
-- Continue fetching one extra record for bounded queries to determine
-  `NextPage` without a count query.
+- Permit limits above the maximum only through `UnsafeLimit`, and keep its
+  resource-consumption warning prominent.
+- Never select `UnsafeLimit` implicitly from query parameters or other
+  untrusted input.
+- Return `ErrInvalidLimit` for unsafe limits that are non-positive or cannot
+  support the one-record lookahead.
+- Return `ErrOffsetTooLarge` before modifying or executing the Ent query when
+  an offset exceeds `MaximumOffset`.
+- Guard all page, limit, offset, and lookahead arithmetic against integer
+  overflow on both 32-bit and 64-bit platforms.
+- Continue fetching one extra record to determine `NextPage` without a count
+  query.
+- Keep default and custom parameter names immutable and request-scoped; do not
+  reintroduce mutable package configuration.
 
 ## Implementation style
 
@@ -67,10 +76,10 @@ When implementing the planned bounded-limit behavior:
 - Avoid generated mocks and assertion frameworks; small fakes are preferred.
 - Add fuzz seeds for boundary values and previously discovered regressions.
 - Express fuzz checks as stable invariants rather than duplicating the
-  implementation. Keep inputs bounded only where an explicitly documented,
-  not-yet-fixed limitation would otherwise make the suite permanently fail.
+  implementation.
 - When a fuzz failure is fixed, retain its minimized input as a regression seed
   or corpus entry.
+- Pin GitHub Actions to full commit SHAs and let Dependabot propose updates.
 
 ## Required verification
 
@@ -100,7 +109,8 @@ git diff --check
 ```
 
 Before finishing any change, verify that examples match the public API and that
-the README clearly distinguishes current behavior from planned behavior.
+security-sensitive behavior is consistent across code, tests, README, and
+SECURITY.md.
 
 ## Code review rules
 
@@ -110,6 +120,7 @@ the README clearly distinguishes current behavior from planned behavior.
 - Flag new dependencies, including test-only dependencies.
 - Flag direct coupling to generated Ent packages or schemas.
 - Flag public behavior changes that lack tests and documentation.
+- Flag GitHub Actions that use mutable tags instead of full commit SHAs.
 - Flag commit messages that do not follow Conventional Commits.
 
 ## Commit messages

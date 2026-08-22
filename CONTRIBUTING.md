@@ -8,6 +8,10 @@ small, predictable, and dependency-free.
 - Go 1.21 or newer
 - Git
 
+Go 1.21 is the source-compatibility floor. Run security scans and production
+software with a currently supported Go release containing the latest security
+patches.
+
 Clone the repository, make the smallest focused change that solves the problem,
 and add or update tests for observable behavior.
 
@@ -36,8 +40,15 @@ make the resource-consumption risk obvious in its name and documentation. Tests
 should cover defaulting, clamping, the unsafe opt-in boundary, and offset
 overflow behavior.
 
-See the README for the distinction between current behavior and the intended
-pre-v1 bounded-limit behavior.
+Keep `DefaultLimit`, `MaximumLimit`, `MaximumOffset`, parameter names, and custom
+parameter-name values immutable. Validate offset arithmetic before modifying or
+executing a query. See the README for the complete public contract.
+
+## Reporting vulnerabilities
+
+Do not open a public issue for a suspected vulnerability. Follow
+[SECURITY.md](SECURITY.md) and use GitHub private vulnerability reporting so the
+maintainer can investigate and coordinate a fix before disclosure.
 
 ## Tests
 

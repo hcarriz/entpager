@@ -2,6 +2,8 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/hcarriz/entpager.svg)](https://pkg.go.dev/github.com/hcarriz/entpager)
 [![Go Report Card](https://goreportcard.com/badge/github.com/hcarriz/entpager)](https://goreportcard.com/report/github.com/hcarriz/entpager)
+[![CI](https://github.com/hcarriz/entpager/actions/workflows/ci.yml/badge.svg)](https://github.com/hcarriz/entpager/actions/workflows/ci.yml)
+[![Security](https://github.com/hcarriz/entpager/actions/workflows/security.yml/badge.svg)](https://github.com/hcarriz/entpager/actions/workflows/security.yml)
 
 Entpager is a small, dependency-free Go package for paginating
 [Ent](https://entgo.io) queries. It uses a structural interface rather than
@@ -13,7 +15,8 @@ does not issue a count query.
 
 ## Requirements
 
-- Go 1.21 or newer
+- Source compatibility with Go 1.21 or newer
+- A supported Go release with current security patches for production use
 - An Ent-style query with `All`, `Offset`, and `Limit` methods
 
 ## Installation
@@ -60,6 +63,10 @@ func listUsers(w http.ResponseWriter, r *http.Request) {
 		client.User.Query().Order(user.ByID()),
 		entpager.Request(r),
 	)
+	if errors.Is(err, entpager.ErrOffsetTooLarge) {
+		http.Error(w, "page is too large", http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		http.Error(w, "could not list users", http.StatusInternalServerError)
 		return
@@ -79,41 +86,78 @@ pagination := entpager.Options(entpager.Page(2), entpager.Limit(50))
 result, err := entpager.Paginate(ctx, client.User.Query(), pagination)
 ```
 
-## Current behavior
+### Custom query-parameter names
 
-The current pre-v1 implementation behaves as follows:
+`RequestWithNames` and `ValuesWithNames` accept immutable custom names. Empty
+fields use the standard `page` and `limit` names:
 
-- The default page is `1` and the default limit is `25`.
-- Pages below `1` are clamped to `1`.
-- A malformed or missing HTTP limit uses the default limit.
-- A malformed or missing HTTP page uses page `1`.
-- A limit of `0` or less disables the limit and returns all remaining results.
-- Positive limits are not currently capped.
-- `Request(nil)` is valid and uses the defaults.
+```go
+names := entpager.ParameterNames{
+	Page:  "p",
+	Limit: "page_size",
+}
 
-The last two points mean applications must not pass untrusted numeric limits to
-the current release without validating them first. An attacker-controlled
-unbounded or very large result set can consume excessive database, memory, and
-network resources. This is the class of risk described by
-[OWASP API4: Unrestricted Resource Consumption](https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/).
+result, err := entpager.Paginate(
+	r.Context(),
+	client.User.Query().Order(user.ByID()),
+	entpager.RequestWithNames(r, names),
+)
+```
 
-## Pre-v1 direction
+## Safe limits
 
-Before v1, the limit behavior is intended to become bounded by default:
+Entpager bounds work caused by ordinary and HTTP-derived pagination options:
 
-- `DefaultLimit` remains `25`.
-- `MaximumLimit` defaults to `100`.
-- Missing, malformed, zero, and negative HTTP limits use `DefaultLimit`.
+- `DefaultLimit` is `25`.
+- `MaximumLimit` is `100`.
+- Missing, malformed, zero, and negative limits use `DefaultLimit`.
 - Limits greater than `MaximumLimit` are clamped to the maximum.
-- Page values below `1` continue to clamp to page `1`.
-- Offset arithmetic is checked to prevent integer overflow.
-- Callers may explicitly opt into a limit above the maximum through an API that
-  clearly identifies the resource-consumption risk as unsafe.
-- HTTP query parameters never enable that unsafe behavior implicitly.
+- Missing, malformed, zero, and negative pages use page `1`.
+- `MaximumOffset` is `1,000,000`.
+- `Paginate` returns `ErrOffsetTooLarge` before modifying or executing the query
+  when the requested offset exceeds that maximum.
+- Offset and lookahead arithmetic are checked before use.
+- HTTP query parameters never bypass these limits.
 
-These bullets describe planned behavior, not the API in the current release.
-Because the module is not yet v1, changes that improve safety or clarity may be
-breaking.
+These controls reduce the unrestricted resource-consumption risk described by
+[OWASP API4:2023](https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/).
+Applications should still enforce request rate limits, deadlines, authorization,
+and database-specific resource controls.
+
+### Explicit unsafe limit
+
+Trusted callers can deliberately exceed `MaximumLimit` with `UnsafeLimit`:
+
+```go
+result, err := entpager.Paginate(
+	ctx,
+	client.User.Query().Order(user.ByID()),
+	entpager.UnsafeLimit(500),
+)
+```
+
+`UnsafeLimit` bypasses only `MaximumLimit`; it does not bypass
+`MaximumOffset`. Non-positive values and the largest platform `int` return
+`ErrInvalidLimit`. Never construct an unsafe limit directly from untrusted
+request data.
+
+## Errors
+
+Use `errors.Is` to handle the exported sentinel errors:
+
+- `ErrInvalidLimit` means an explicit `UnsafeLimit` cannot be executed safely.
+- `ErrOffsetTooLarge` means the requested page and limit exceed
+  `MaximumOffset`.
+
+Errors returned by the underlying Ent query are returned unchanged.
+
+## Pre-v1 compatibility
+
+The package is not yet v1, so security and API improvements may be breaking.
+In particular, `Limit(0)` and negative limits now use `DefaultLimit` rather
+than disabling pagination, positive limits are capped unless `UnsafeLimit` is
+used, and the exported defaults and parameter names are constants rather than
+mutable variables.
 
 ## How it integrates with Ent
 
@@ -136,6 +180,9 @@ third-party dependencies.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and project
 rules. The test suite includes table-driven unit tests and native Go fuzzing for
 query-parameter parsing and pagination invariants.
+
+Please report vulnerabilities according to [SECURITY.md](SECURITY.md), not in a
+public issue.
 
 ## License
 
