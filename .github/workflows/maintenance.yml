@@ -1,0 +1,45 @@
+name: Maintenance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  maintenance:
+    name: Vulnerability scan and extended fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        id: setup_go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+          cache-dependency-path: tools/go.sum
+
+      - name: Scan for known vulnerabilities
+        run: go tool -modfile=tools/go.mod govulncheck ./...
+
+      - name: Fuzz for 10 minutes
+        if: ${{ !cancelled() && steps.setup_go.outcome == 'success' }}
+        run: go test -run=^$ -fuzz=^FuzzPaginationFromValues$ -fuzztime=10m ./...
+
+      - name: Preserve fuzz failures
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: extended-fuzz-${{ github.run_id }}-${{ github.run_attempt }}
+          path: testdata/fuzz/**
+          if-no-files-found: ignore
+          retention-days: 7
