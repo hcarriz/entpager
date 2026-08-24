@@ -17,17 +17,23 @@ This file applies to the entire repository.
 - `README.md` is user-facing documentation.
 - `CONTRIBUTING.md` describes the contributor workflow.
 - `SECURITY.md` defines supported versions and private vulnerability reporting.
-- `.github/workflows/` contains CI and security automation.
+- `.github/workflows/` contains CI, security, maintenance, and release
+  automation.
+- `tools/` pins development-only static analysis and vulnerability tooling in a
+  separate Go module.
 
 Prefer this flat layout while the package remains small. Add a package or
 directory only when it has a distinct, independently useful responsibility.
 
 ## Working agreements
 
-- Support Go 1.21 and newer.
-- Treat Go 1.21 as the source-compatibility floor, not a secure deployment
-  recommendation; production guidance must require a supported, patched Go
-  release.
+- Support the minimum Go version required by the latest stable Ent release and
+  newer. The current floor is Go 1.24.
+- Treat the declared Go version as a source-compatibility floor, not a secure
+  deployment recommendation; production guidance must require a supported,
+  patched Go release.
+- Review an Ent-driven Go version change separately and update `go.mod`, CI,
+  README, contributor guidance, and the security policy together.
 - Keep production and test code dependency-free; use the standard library.
 - Do not add a direct dependency on Ent. Preserve the small structural `Ent`
   interface so generated Ent query types satisfy it implicitly.
@@ -86,6 +92,46 @@ directory only when it has a distinct, independently useful responsibility.
   or corpus entry.
 - Pin GitHub Actions to full commit SHAs and let Dependabot propose updates.
 
+## Development tools
+
+Development commands are pinned with Go `tool` directives in `tools/go.mod` and
+`tools/go.sum`. The separate module keeps tool dependencies out of the library's
+public module. Run them from the repository root with `-modfile=tools/go.mod`; do
+not add a legacy `tools.go`, rely on globally installed binaries, or use
+`go run ...@latest` in documented or automated workflows.
+
+After an approved tool update, run:
+
+```sh
+go get -modfile=tools/go.mod -tool <package>@<version>
+go mod tidy -modfile=tools/go.mod
+```
+
+Review and commit both tool module files.
+
+## Repository automation
+
+- Keep required CI job names `Test (minimum)`, `Test (current)`, `Quality`, and
+  `Fuzz smoke` stable because repository rules may refer to them.
+- Set `GOTOOLCHAIN=local` in workflows, use fixed runner images and job
+  timeouts, and disable persisted checkout credentials.
+- Keep pull-request checks read-only. Release Please is the narrow exception:
+  its job may grant only `contents: write` and `pull-requests: write`.
+- Preserve fuzz failures as short-lived workflow artifacts. Do not commit a
+  generated corpus unless it is a minimized regression that belongs in tests.
+- Keep the extended fuzz and vulnerability Maintenance workflow manually
+  dispatched; the Security workflow already provides scheduled scanning.
+- Release Please creates release pull requests, immutable `v`-prefixed tags,
+  and GitHub Releases from Conventional Commits on `master`. The initial release
+  is `v0.1.0`.
+- During v0, `fix` and `perf` commits produce patch releases. `feat` commits and
+  approved breaking changes produce minor releases. Documentation, tests,
+  refactoring, CI, and maintenance commits do not release by themselves.
+- Never edit `.release-please-manifest.json` except during initial bootstrap,
+  create release tags manually, delete or replace a published tag, or add a
+  generated changelog. Roll fixes forward and use a `retract` directive when a
+  published module version must be withdrawn.
+
 ## Required verification
 
 After changing Go code, run:
@@ -96,6 +142,8 @@ go vet ./...
 go test ./...
 go test -race ./...
 go test -shuffle=on -count=1 ./...
+go tool -modfile=tools/go.mod staticcheck ./...
+go tool -modfile=tools/go.mod govulncheck ./...
 ```
 
 Run each affected fuzz target for at least 30 seconds. For example:
@@ -145,3 +193,7 @@ feat!: bound request-derived limits by default
 Mark breaking changes with `!` before the colon or an uppercase
 `BREAKING CHANGE:` footer. Include a footer when callers need migration details,
 even though breaking changes are currently allowed before v1.
+
+Pull requests are normally squash-merged, so their titles must also be valid,
+release-ready Conventional Commits. Beginning with v1, preserve source
+compatibility throughout the v1 module line.

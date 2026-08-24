@@ -10,3 +10,26 @@ updates:
       timezone: Etc/UTC
     commit-message:
       prefix: "ci(deps)"
+    open-pull-requests-limit: 2
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: gomod
+    directory: /tools
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "build(deps)"
+    open-pull-requests-limit: 2
+    groups:
+      tools-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

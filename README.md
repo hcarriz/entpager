@@ -15,7 +15,8 @@ does not issue a count query.
 
 ## Requirements
 
-- Source compatibility with Go 1.21 or newer
+- Source compatibility with Go 1.24 or newer, matching the minimum required by
+  the latest stable Ent release
 - A supported Go release with current security patches for production use
 - An Ent-style query with `All`, `Offset`, and `Limit` methods
 
@@ -195,6 +196,10 @@ Errors returned by the underlying Ent query are returned unchanged.
 ## Pre-v1 compatibility
 
 The package is not yet v1, so security and API improvements may be breaking.
+The minimum Go version has changed from 1.21 to 1.24 to match the latest stable
+Ent release. Callers using an older Go toolchain must upgrade it before using
+the next Entpager release.
+
 `Paginate` now requires a dedicated `Pagination` argument; the former
 `Page`, `Limit`, `Values`, `Request`, and `Options` option helpers have been
 removed. Migrate direct values and HTTP requests as follows:
@@ -233,6 +238,19 @@ type Ent[Self, Entity any] interface {
 Generated Ent query types already have this shape. The interface also makes the
 package straightforward to test with a small fake and keeps this module free of
 third-party dependencies.
+
+## Versioning
+
+Release Please creates the initial `v0.1.0` tag and subsequent releases from
+Conventional Commits on `master`. During v0, `fix` and `perf` commits produce
+patch releases; `feat` commits and approved breaking changes produce minor
+releases. Breaking changes must include migration guidance. Beginning with v1,
+Entpager will preserve source compatibility throughout the v1 module line.
+
+GitHub Releases are the release-note source of truth; the repository does not
+maintain a generated changelog. See
+[GitHub Releases](https://github.com/hcarriz/entpager/releases) for published
+versions.
 
 ## Contributing
 

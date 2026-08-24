@@ -12,46 +12,115 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   test:
-    name: Go ${{ matrix.go-version }}
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        go-version:
-          - 1.21.x
-          - stable
+        include:
+          - lane: minimum
+            go-version: 1.24.x
+          - lane: current
+            go-version: stable
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
-          cache: false
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Verify declared minimum Go version
+        if: matrix.lane == 'minimum'
+        shell: bash
+        run: |
+          declared_minor="$(go list -m -f '{{.GoVersion}}' | awk -F. '{print $1 "." $2}')"
+          running_minor="$(go env GOVERSION | sed -E 's/^go([0-9]+\.[0-9]+).*/\1/')"
+          if [[ "$declared_minor" != "$running_minor" ]]; then
+            echo "::error::go.mod declares Go $declared_minor, but the minimum CI lane runs Go $running_minor. Update the Ent compatibility policy, go.mod, CI, and documentation together."
+            exit 1
+          fi
 
       - name: Vet
         run: go vet ./...
 
+      - name: Test
+        run: go test -count=1 ./...
+
       - name: Test with race detector
         run: go test -race -shuffle=on -count=1 ./...
 
-  fuzz:
-    name: Fuzz
-    runs-on: ubuntu-latest
-
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
-          cache: false
+          cache: true
+          cache-dependency-path: tools/go.sum
 
-      - name: Fuzz query values
-        run: go test -fuzz=FuzzPaginationFromValues -fuzztime=30s .
+      - name: Check formatting and whitespace
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l ./*.go)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files require gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+          git diff --check
+
+      - name: Run staticcheck
+        run: go tool -modfile=tools/go.mod staticcheck ./...
+
+      - name: Scan for known vulnerabilities
+        run: go tool -modfile=tools/go.mod govulncheck ./...
+
+  fuzz-smoke:
+    name: Fuzz smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Fuzz for 30 seconds
+        run: go test -run=^$ -fuzz=^FuzzPaginationFromValues$ -fuzztime=30s ./...
+
+      - name: Preserve fuzz failures
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: testdata/fuzz/**
+          if-no-files-found: ignore
+          retention-days: 7

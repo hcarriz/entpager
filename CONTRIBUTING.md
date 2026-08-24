@@ -5,12 +5,14 @@ small, predictable, and dependency-free.
 
 ## Development requirements
 
-- Go 1.21 or newer
+- Go 1.24 or newer
 - Git
 
-Go 1.21 is the source-compatibility floor. Run security scans and production
+Go 1.24 is the source-compatibility floor because it is the minimum version
+required by the latest stable Ent release. Run security scans and production
 software with a currently supported Go release containing the latest security
-patches.
+patches. When Ent raises its minimum, Entpager reviews and updates its floor
+deliberately across the module, CI, and documentation.
 
 Clone the repository, make the smallest focused change that solves the problem,
 and add or update tests for observable behavior.
@@ -77,6 +79,8 @@ go test ./...
 go test -race ./...
 go test -shuffle=on -count=1 ./...
 go test -cover ./...
+go tool -modfile=tools/go.mod staticcheck ./...
+go tool -modfile=tools/go.mod govulncheck ./...
 git diff --check
 ```
 
@@ -92,6 +96,20 @@ normalization, limit enforcement, or offset arithmetic.
 
 For a documentation-only change, `git diff --check` is sufficient, but ensure
 all examples still match the public API.
+
+Development tools and their transitive dependencies are pinned separately in
+`tools/go.mod` and `tools/go.sum`, so they do not affect users of the Entpager
+module. Run tools from the repository root with `-modfile=tools/go.mod`; no
+global installation is required. After an approved update, run:
+
+```sh
+go get -modfile=tools/go.mod -tool <package>@<version>
+go mod tidy -modfile=tools/go.mod
+```
+
+Commit both tool module files with the update. Before a release or after a
+security-sensitive pagination change, manually dispatch the Maintenance
+workflow for its ten-minute fuzz pass and vulnerability scan.
 
 ## Commit messages
 
@@ -126,6 +144,13 @@ BREAKING CHANGE: zero and negative HTTP limits now use DefaultLimit instead of
 disabling pagination.
 ```
 
+Entpager uses Conventional Commits because Release Please derives versions and
+GitHub release notes from commits on `master`. Pull requests are normally
+squash-merged, so give each pull request a release-ready Conventional Commit
+title. During v0, `fix` and `perf` produce patch releases; `feat` and approved
+breaking changes produce minor releases. Documentation, tests, refactoring, CI,
+and maintenance commits do not release by themselves.
+
 ## Change and review scope
 
 Keep commits focused and explain user-visible behavior changes. Reviewers should
@@ -136,3 +161,22 @@ be able to determine:
 - how limits from untrusted input remain bounded;
 - which tests cover the behavior; and
 - which documentation was updated.
+
+## Releases
+
+The Release Please workflow runs after pushes to `master`. Releasable commits
+create or update a release pull request containing the next version and
+generated release notes. Merging that pull request creates the immutable
+`v`-prefixed tag and corresponding GitHub Release. The first release is
+`v0.1.0`; the repository intentionally does not maintain a generated
+`CHANGELOG.md`.
+
+Repository administrators must allow GitHub Actions to create pull requests in
+the repository's Actions settings. The workflow uses only the short-lived
+`GITHUB_TOKEN`; it does not require a personal access token.
+
+Do not edit `.release-please-manifest.json` outside the initial bootstrap,
+create release tags manually, or delete or replace an existing tag. Retry a
+transient automation failure with the workflow's manual dispatch. If a
+published version must be withdrawn, release a newer version containing an
+appropriate `retract` directive rather than changing the published tag.
